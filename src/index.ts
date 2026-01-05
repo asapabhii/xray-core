@@ -25,10 +25,9 @@ export const xray = {
   ) => defaultClient.step(stepType, stepName, fn, options),
 
   /**
-   * Configure X-Ray SDK behavior.
-   * Configuration is global and affects all subsequent runs.
-   * Creates a new client instance with the updated configuration.
-   */
+ * Configure the SDK.
+ * Global config, affects all subsequent runs.
+ */
   configure: (config: Partial<XRayConfig>) => {
     Object.assign(defaultConfig, config);
     // Recreate client with new config
@@ -41,8 +40,8 @@ export type { Run, Step, Candidate, StepOptions, RunOptions } from './types';
 export type { XRayConfig } from './config';
 
 /**
- * Create a new X-Ray client instance with custom configuration.
- * Use this when you need multiple clients pointing to different backends.
+ * Create a standalone client instance.
+ * Use when you need multiple clients pointing to different backends.
  */
 export function createXRayClient(config: Partial<XRayConfig> = {}): XRayClient {
   return new XRayClient({ ...defaultConfig, ...config });
