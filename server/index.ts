@@ -1,11 +1,8 @@
 /**
- * X-Ray Reference Backend
+ * X-Ray Backend Server
  * 
- * This is a minimal reference implementation for demonstrating the X-Ray API.
- * It uses SQLite for simplicity and portability.
- * 
+ * SQLite-based backend for local development and demos.
  * For production, use PostgreSQL with the schema in backend/schema.sql.
- * This reference server is NOT intended for production use.
  */
 
 import express from 'express';
