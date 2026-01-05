@@ -4,18 +4,15 @@
 
 RESTful API for ingesting and querying X-Ray data. Designed for queryability over flexibility.
 
-This API specification exists to support the SDK and demonstrate queryability, not to define a production-ready service. The API is assumed to run as a local or internal service (e.g., `http://localhost:4000/api/v1`). Deployment, networking, and service hosting are out of scope.
-
 ## Base URL
 
-The API is assumed to run as a local or internal service. Example:
 ```
 http://localhost:4000/api/v1
 ```
 
 ## Authentication
 
-Authentication is intentionally omitted in this reference implementation. In a real deployment, ingestion and query endpoints would be protected using service-level credentials (API keys or mTLS), but this is out of scope as of now.
+Not implemented. In production, use API keys or mTLS.
 ## Ingest Endpoints
 
 ### POST /runs
@@ -406,17 +403,13 @@ Health check endpoint.
 ## Storage Assumptions
 
 - **PostgreSQL 14+**: For structured queries and JSONB support
-- **Optional object storage**: For large candidate blobs if FULL capture exceeds row size limits (conceptual, not implemented)
+- **Optional object storage**: For large candidate blobs if FULL capture exceeds row size limits
 
-Note: Retention policies, backup strategies, and operational concerns are out of scope for this reference implementation. These are mentioned to show awareness of production considerations, not as implemented features.
+## Rate Limiting
 
-## Rate Limiting (Conceptual)
-
-Rate limiting would be implemented in a production deployment to prevent abuse. Example limits (illustrative only):
+Not implemented. Production would use:
 - **Ingest**: 1000 requests/minute per client
 - **Query**: 100 requests/minute per client
-
-This is not implemented in the reference design.
 
 ## Error Responses
 
