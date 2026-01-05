@@ -1,322 +1,103 @@
-# X-Ray: Decision Observability for Algorithmic Pipelines
+# X-Ray Architecture
 
-## What This System Is
+Decision observability for multi-step algorithmic pipelines.
 
-X-Ray is a decision observability system for multi-step, non-deterministic algorithmic pipelines. It answers one question: **"Why did the system make this decision?"**
+## The Problem
 
-### What This System Is NOT
+Pipelines that combine LLMs, filters, and ranking algorithms are hard to debug. When the output is wrong, traditional logs tell you what happened but not why a decision was made.
 
-- **Not tracing**: We track decision boundaries, not execution spans. Latency and call graphs are out of scope.
-- **Not logging**: Structured decision artifacts, not free-form text logs.
-- **Not metrics**: Step-level metrics are normalized and queryable, not aggregated time-series.
-- **Not model monitoring**: We explain decisions, not model performance over time.
+X-Ray captures decision context at each step so you can trace back from a bad output to the exact step that failed.
 
-Confusing these is dangerous because it leads to:
-- Over-instrumentation (capturing everything)
-- Unqueryable data (logs that can't answer "why")
-- Wrong abstractions (execution time vs decision quality)
+## System Design
 
-## Core Principles
-
-1. **Decision observability > execution observability**: We model why decisions were made, not how long they took.
-2. **Queryability beats flexibility**: Rigid schemas enable cross-pipeline queries.
-3. **Defaults must be safe**: Minimal capture by default, opt-in for verbosity.
-4. **Instrumentation must never break the pipeline**: SDK degrades to no-op if backend is unavailable.
-5. **Boring tech + clear abstractions > cleverness**: PostgreSQL, REST APIs, no exotic tech.
-6. **Explicit trade-offs > pretending something is perfect**: Acknowledge limitations upfront.
-
-## Deployment and Scope
-
-**Deployment, networking, and service hosting are intentionally out of scope for this reference implementation.**
-
-X-Ray is designed as an internal or local service. The deployment environment, networking configuration, DNS, and infrastructure setup are not specified. This design focuses on decision observability architecture and data models, not operational deployment.
-
-**Authentication is intentionally omitted.** In a production deployment, service-level authentication (API keys or mTLS) would be used to protect ingestion and query endpoints. For this reference implementation, authentication is not required to evaluate the decision observability design.
-
-**Database choice:** PostgreSQL is used as the reference datastore to prioritize structured, queryable decision data over flexible but unstructured storage. Optional object storage may be mentioned for large artifacts, but the core schema assumes PostgreSQL with JSONB support.
-
-## Conceptual Model
-
-### 1. Run
-
-A Run represents one execution of a pipeline.
-
-**Required fields:**
-- `run_id` (UUID, primary key)
-- `pipeline_name` (string, indexed)
-- `pipeline_version` (string, indexed)
-- `environment` (string: dev/staging/prod, defaults to prod if not specified)
-- `started_at`, `ended_at` (timestamps)
-- `metadata` (opaque JSON, non-indexed)
-
-**Rationale:**
-- Runs are the atomic unit of debugging. All queries roll up to runs.
-- Versioning enables comparing behavior across pipeline iterations.
-- Environment separation enables comparing behavior across different deployment contexts.
-
-### 2. Step
-
-A Step represents a semantic decision boundary.
-
-**Required fields:**
-- `step_id` (UUID, primary key)
-- `run_id` (UUID, foreign key)
-- `step_type` (enum, indexed)
-- `step_name` (string, indexed)
-- `position` (integer, ordered within run)
-- `metrics` (normalized key-value, indexed)
-- `candidates_in` (count)
-- `candidates_out` (count)
-- `drop_ratio` (computed: 1 - candidates_out/candidates_in)
-- `capture_level` (enum: NONE/SUMMARY/FULL)
-- `artifacts` (typed JSON per step_type)
-- `started_at`, `ended_at` (timestamps)
-
-**Step Types (strict enum):**
-- `INPUT`: Initial candidate generation
-- `GENERATION`: LLM or heuristic-based generation
-- `RETRIEVAL`: External data fetch (vector DB, knowledge base)
-- `FILTER`: Candidate elimination
-- `RANKING`: Score-based ordering
-- `EVALUATION`: Quality assessment
-- `SELECTION`: Final choice
-
-**Why step typing is enforced:**
-- Enables cross-pipeline queries: "Show all FILTER steps that dropped >90%"
-- Prevents arbitrary strings that break queryability
-- Allows type-specific artifact schemas
-
-**What breaks if step types are free-form:**
-- Cannot query across pipelines reliably
-- Artifact schemas become untyped blobs
-- Metric normalization fails
-
-### 3. Candidate
-
-A Candidate represents an option considered by the system.
-
-**Key properties:**
-- `candidate_id` (stable within run)
-- `step_id` (where it appears)
-- `content` (summary or full, depending on capture_level)
-- `metadata` (scores, reasons, flags)
-
-**Why candidates are first-class:**
-- Enables tracking: "Which candidates survived all filters?"
-- Allows sampling strategies: capture full content for top N only
-- Supports redaction: sensitive data can be masked
-
-Candidates are persisted only for FULL capture to prevent unbounded storage growth while preserving deep debuggability when explicitly requested.
-
-### 4. Decision Artifacts
-
-Structured explanation of why something happened.
-
-**Examples:**
-- FILTER: `{ "rules": ["price > 100", "in_stock = true"], "rejected_count": 450 }`
-- RANKING: `{ "scores": { "relevance": 0.95, "quality": 0.82 }, "method": "weighted_sum" }`
-- GENERATION: `{ "model": "gpt-4", "reasoning_summary": "Selected top 3 based on keyword match", "tokens_used": 1200 }`
-
-**Properties:**
-- Structured (typed per step_type)
-- Optional (only if capture_level allows)
-- Not free-form JSON (enforced schemas)
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           YOUR PIPELINE                                  │
+│  ┌────────┐   ┌──────────┐   ┌────────┐   ┌─────────┐   ┌──────────┐   │
+│  │ INPUT  │──▶│GENERATION│──▶│ FILTER │──▶│ RANKING │──▶│SELECTION │   │
+│  └───┬────┘   └────┬─────┘   └───┬────┘   └────┬────┘   └────┬─────┘   │
+└──────┼─────────────┼─────────────┼─────────────┼─────────────┼──────────┘
+       ▼             ▼             ▼             ▼             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         X-RAY SDK                                        │
+│  xray.step() wraps each step, captures context, sends to backend         │
+└─────────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         X-RAY API                                        │
+│  Ingest: POST /runs, /steps, /candidates                                 │
+│  Query:  GET /runs, /steps, /analytics                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DATABASE                                         │
+│  runs → steps → candidates                                               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Data Model
 
-### Step-Centric Schema
+```
+RUN
+├── run_id (UUID)
+├── pipeline_name (indexed)
+├── pipeline_version
+├── environment (dev/staging/prod)
+├── started_at, ended_at
+└── metadata (JSON)
+
+STEP
+├── step_id (UUID)
+├── run_id (FK)
+├── step_type (enum: INPUT, GENERATION, RETRIEVAL, FILTER, RANKING, EVALUATION, SELECTION)
+├── step_name
+├── position (order within run)
+├── candidates_in, candidates_out
+├── drop_ratio (computed)
+├── capture_level (NONE, SUMMARY, FULL)
+├── metrics (JSON, indexed)
+└── artifacts (JSON)
+
+CANDIDATE (only stored when capture_level = FULL)
+├── candidate_id
+├── step_id (FK)
+├── content (JSON)
+└── metadata (JSON)
+```
+
+### Why This Structure?
+
+**Step types are enums, not strings.** If developers could use arbitrary strings like "filter", "Filter", "filtering", "price-filter", cross-pipeline queries would be impossible. With enums, this works:
 
 ```sql
--- Runs table
-CREATE TABLE runs (
-  run_id UUID PRIMARY KEY,
-  pipeline_name VARCHAR(255) NOT NULL,
-  pipeline_version VARCHAR(100) NOT NULL,
-  environment VARCHAR(50) NOT NULL,
-  started_at TIMESTAMP NOT NULL,
-  ended_at TIMESTAMP,
-  metadata JSONB
-);
-
-CREATE INDEX idx_runs_pipeline ON runs(pipeline_name, pipeline_version);
-CREATE INDEX idx_runs_environment ON runs(environment, started_at);
-
--- Steps table
-CREATE TABLE steps (
-  step_id UUID PRIMARY KEY,
-  run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
-  step_type VARCHAR(50) NOT NULL,
-  step_name VARCHAR(255) NOT NULL,
-  position INTEGER NOT NULL,
-  metrics JSONB NOT NULL,
-  candidates_in INTEGER NOT NULL,
-  candidates_out INTEGER NOT NULL,
-  drop_ratio DECIMAL(5,4),
-  capture_level VARCHAR(20) NOT NULL,
-  artifacts JSONB,
-  started_at TIMESTAMP NOT NULL,
-  ended_at TIMESTAMP
-);
-
-CREATE INDEX idx_steps_run ON steps(run_id, position);
-CREATE INDEX idx_steps_type ON steps(step_type, drop_ratio);
-CREATE INDEX idx_steps_metrics ON steps USING GIN(metrics);
-
--- Candidates table (only if capture_level = FULL)
-CREATE TABLE candidates (
-  candidate_id VARCHAR(255) NOT NULL,
-  step_id UUID NOT NULL REFERENCES steps(step_id) ON DELETE CASCADE,
-  content TEXT,
-  metadata JSONB,
-  PRIMARY KEY (candidate_id, step_id)
-);
-
-CREATE INDEX idx_candidates_step ON candidates(step_id);
+SELECT * FROM steps WHERE step_type = 'FILTER' AND drop_ratio > 0.9;
 ```
 
-**Why this is NOT a free-form JSON event log:**
-- Normalized metrics enable queries: `WHERE metrics->>'rejection_reason' = 'price_too_high'`
-- Step typing enables aggregation: `GROUP BY step_type, drop_ratio`
-- Schema rigidity enables cross-pipeline analysis
+**Alternatives I considered:**
 
-**What flexibility is intentionally sacrificed:**
-- Cannot add arbitrary fields to steps without migration
-- Artifacts must conform to step_type schemas
-- Candidates are only captured at FULL capture_level
+| Approach | Why Rejected |
+|----------|--------------|
+| Free-form JSON events | Can't query across pipelines |
+| Span-based tracing | Optimized for latency, not decisions |
+| Append-only log | No structured queries |
 
-## Queryability Guarantees
+**What breaks with different choices:**
+- Free-form step names → no cross-pipeline queries
+- No capture levels → storage explodes or you lose detail
+- Candidates not first-class → can't track what survived each step
 
-### Example Queries
+## API Spec
 
-**"Show all runs where ANY filter step eliminated more than 90% of candidates"**
-```sql
-SELECT DISTINCT r.run_id, r.pipeline_name, s.step_name, s.drop_ratio
-FROM runs r
-JOIN steps s ON r.run_id = s.run_id
-WHERE s.step_type = 'FILTER' AND s.drop_ratio > 0.9;
-```
-
-**"Find ranking steps with inconsistent score distributions"**
-```sql
-SELECT step_id, step_name, metrics->>'score_variance' as variance
-FROM steps
-WHERE step_type = 'RANKING' 
-  AND (metrics->>'score_variance')::float > 0.5;
-```
-
-**How step typing enables this:**
-- `step_type = 'FILTER'` filters to relevant steps only
-- Cross-pipeline queries work because types are consistent
-
-**How metric normalization enables this:**
-- `metrics->>'rejection_reason'` works across all FILTER steps
-- Developers must use normalized keys (enforced by SDK)
-
-**What is enforced vs documented:**
-- **Enforced**: Step types (enum), metric keys (SDK validation)
-- **Documented**: Artifact schemas per type, capture_level semantics
-
-**Limitations:**
-- False positives: High drop_ratio may be intentional (e.g., strict filters)
-- Edge cases: If candidates_in = 0, drop_ratio is treated as NULL and excluded from ratio-based queries
-- Metric keys must be known: Cannot query unknown metrics
-
-## Performance & Scale
-
-### Scenario: 5,000 candidates → 30 survivors
-
-**Storage cost:**
-- SUMMARY capture: ~1KB per step (metrics + counts only)
-- FULL capture: ~50KB per candidate × 5,000 = 250MB per step
-- **Strategy**: Default to SUMMARY, opt-in to FULL for top N candidates only
-
-**Serialization overhead:**
-- Artifacts are typed JSON, not raw blobs
-- Candidates are sampled: capture full content for top 10% only
-
-**Network overhead:**
-- Async ingestion: SDK buffers and sends in batches
-- Compression: gzip for large payloads
-
-**Latency sensitivity:**
-- SDK is fire-and-forget: no blocking on backend
-- Backend processes asynchronously
-
-**Capture policies:**
-- **Default (NONE)**: Only step metadata, no candidates
-- **SUMMARY**: Metrics + counts + artifact summaries
-- **FULL**: All candidates with full content (opt-in per step)
-
-**What requires opt-in:**
-- FULL capture_level
-- Candidate content (not just IDs)
-- Detailed reasoning summaries
-
-**What is never captured automatically:**
-- Raw LLM tokens (only summaries)
-- Full candidate content at SUMMARY level
-- External API responses (only relevant fields)
-
-## SDK Design
-
-### Minimal Example
-
-```typescript
-import { xray, StepType, CaptureLevel } from '@xray/core';
-
-const result = await xray.run('competitor-selection', 'v1.0.0', async () => {
-  const candidates = await xray.step(StepType.INPUT, 'fetch-products', async () => {
-    return await fetchProducts();
-  });
-
-  const filtered = await xray.step(StepType.FILTER, 'price-filter', async () => {
-    return candidates.filter(p => p.price < 100);
-  }, {
-    captureLevel: CaptureLevel.SUMMARY,
-    artifacts: { threshold: 100, rule: 'price < 100' }
-  });
-
-  return filtered;
-});
-```
-
-### Full Instrumentation
-
-```typescript
-const ranked = await xray.step(StepType.RANKING, 'relevance-score', async () => {
-  return candidates.map(c => ({
-    ...c,
-    score: calculateScore(c)
-  })).sort((a, b) => b.score - a.score);
-}, {
-  captureLevel: CaptureLevel.FULL,
-  candidates: candidates.map(c => ({ candidateId: c.id, content: c })),
-  artifacts: {
-    method: 'weighted_sum',
-    weights: { relevance: 0.7, quality: 0.3 },
-    scores: candidates.map(c => ({ id: c.id, score: calculateScore(c) }))
-  }
-});
-```
-
-### Degradation Behavior
-
-If X-Ray backend is unavailable:
-- SDK logs warning once
-- All `xray.step()` calls become no-ops
-- Pipeline continues normally
-- No exceptions thrown
-
-## Backend API
-
-### Ingest Endpoints
+### Ingest
 
 **POST /api/v1/runs**
 ```json
 {
   "run_id": "uuid",
   "pipeline_name": "competitor-selection",
-  "pipeline_version": "v2.1.0",
+  "pipeline_version": "v1.0.0",
   "environment": "prod",
   "started_at": "2024-01-15T10:00:00Z"
 }
@@ -330,154 +111,251 @@ If X-Ray backend is unavailable:
   "step_type": "FILTER",
   "step_name": "price-filter",
   "position": 2,
-  "metrics": { "rejection_reason": "price_too_high", "count": 450 },
   "candidates_in": 500,
   "candidates_out": 50,
   "drop_ratio": 0.9,
   "capture_level": "SUMMARY",
-  "artifacts": { "threshold": 100, "rule": "price < 100" },
-  "started_at": "2024-01-15T10:00:05Z",
-  "ended_at": "2024-01-15T10:00:06Z"
+  "metrics": { "rejected_count": 450 },
+  "artifacts": { "rule": "price < 100" }
 }
 ```
 
-**POST /api/v1/candidates** (batch, only if capture_level = FULL)
+**POST /api/v1/candidates** (batch, only for FULL capture)
 ```json
 {
   "step_id": "uuid",
   "candidates": [
-    { "candidate_id": "prod-123", "content": "...", "metadata": {} }
+    { "candidate_id": "prod-123", "content": {...}, "metadata": {...} }
   ]
 }
 ```
 
-### Query Endpoints
-
-**GET /api/v1/runs/:run_id**
-Returns full run with all steps.
+### Query
 
 **GET /api/v1/runs?pipeline_name=X&step_type=FILTER&min_drop_ratio=0.9**
-Filter runs by step metrics.
 
-**GET /api/v1/steps?run_id=X**
-Get all steps for a run.
+Returns runs that have filter steps with >90% drop ratio.
 
-**GET /api/v1/steps/:step_id/candidates**
-Get candidates for a step (if captured).
+**GET /api/v1/runs/:id**
 
-### Indexing Strategy
+Returns run with all steps.
 
-- Primary: `(run_id, position)` for step ordering
-- Secondary: `(step_type, drop_ratio)` for cross-pipeline queries
-- GIN index on `metrics` JSONB for key-value queries
-- Time-based partitioning on `started_at` for retention
+**GET /api/v1/analytics/high-drop-steps?step_type=FILTER&min_drop_ratio=0.9**
 
-### Storage Assumptions
-
-- PostgreSQL for structured queries (runs, steps)
-- Optional: S3 for large candidate blobs (if FULL capture)
-- Retention: 90 days default, configurable per environment
+Returns steps across all pipelines matching criteria.
 
 ## Debugging Walkthrough
 
-### Example: Phone case matched against laptop stand
+Scenario: Competitor selection returns a laptop stand for a phone case.
 
-**1. Inspect run**
+**Step 1: Find the run**
 ```
-GET /api/v1/runs/abc-123
-→ Pipeline: product-matcher, Version: v1.2.0, Environment: prod
-```
-
-**2. Inspect steps**
-```
-Step 1: INPUT - "fetch-candidates"
-  candidates_in: 0, candidates_out: 5000
-
-Step 2: GENERATION - "keyword-extraction"
-  candidates_in: 5000, candidates_out: 5000
-  artifacts: { model: "gpt-4", reasoning_summary: "Extracted keywords from product titles" }
-
-Step 3: FILTER - "category-match"
-  candidates_in: 5000, candidates_out: 4500
-  drop_ratio: 0.1
-  artifacts: { rule: "category must match", rejected: 500 }
-
-Step 4: RANKING - "relevance-score"
-  candidates_in: 4500, candidates_out: 4500
-  artifacts: { method: "cosine_similarity", top_score: 0.95 }
-
-Step 5: SELECTION - "top-10"
-  candidates_in: 4500, candidates_out: 10
-  drop_ratio: 0.998
+GET /api/v1/runs?pipeline_name=competitor-selection
 ```
 
-**3. Identify failure**
-- Step 2 (GENERATION): Keywords extracted incorrectly
-  - Artifact shows: "phone case" → ["phone", "case", "protection"]
-  - Should have matched "laptop stand" category, but didn't
-- Step 3 (FILTER): Over-aggressive category filter
-  - Dropped 500 candidates, but phone case should have passed
-- Step 4 (RANKING): Score was high (0.95) but irrelevant
-  - Cosine similarity matched on "phone" keyword, not product type
+**Step 2: Get all steps**
+```
+GET /api/v1/runs/<run_id>
+```
 
-**4. Root cause**
-- Keyword extraction (GENERATION) failed to identify product type
-- Category filter (FILTER) was too strict
-- Ranking (RANKING) optimized for keyword match, not semantic similarity
+**Step 3: Analyze each step**
 
-**Fix**: Update GENERATION step to include product type detection, relax FILTER rules, adjust RANKING weights.
+```
+GENERATION - keyword-extraction
+  artifacts: { keywords: ["phone", "slim", "case", "matte"] }
+  ⚠️ "phone" extracted as standalone keyword
 
-## Real-World Retrofit
+RETRIEVAL - candidate-retrieval  
+  candidates_out: 9
+  ⚠️ Retrieved laptop stands that have "phone holder" feature
 
-### System: E-commerce Search Ranking Pipeline
+FILTER - price-rating-filter
+  candidates_in: 9, candidates_out: 9, drop_ratio: 0
+  ✓ Filter passed everything (not the problem)
 
-**What existed:**
-- Multi-stage pipeline: query expansion → candidate retrieval → filtering → ranking → selection
-- Non-deterministic: LLM-based query expansion, learned ranking model
-- Pain point: Bad results (irrelevant products ranked high) with no explanation
+RANKING - relevance-ranking
+  artifacts: { 
+    weights: { keyword_match: 0.35, reviews: 0.4, category: 0.05 },
+    top_scores: [
+      { id: "L002", score: 0.68, category: "laptop-accessories" },
+      { id: "P005", score: 0.65, category: "phone-accessories" }
+    ]
+  }
+  ⚠️ Category weight is 5%, reviews weight is 40%
+  ⚠️ Laptop stand has more reviews, wins despite wrong category
 
-**Why logs failed:**
-- Logs showed "retrieved 1000 candidates, ranked, returned top 10"
-- No visibility into:
-  - Which filters eliminated good candidates
-  - Why ranking model scored irrelevant items high
-  - What the LLM expanded the query to
+SELECTION - best-match
+  selected: "L002" (Portable Phone & Tablet Stand)
+```
 
-**How X-Ray would have helped:**
-- **Time to root cause**: 2 hours → 5 minutes
-- **Query**: "Show all runs where FILTER steps dropped >80% and final selection had low relevance scores"
-- **Finding**: Query expansion (GENERATION) was adding irrelevant keywords, causing retrieval (RETRIEVAL) to fetch wrong category, but ranking (RANKING) still scored them high due to keyword overlap
+**Root cause:** Ranking weights category at 5% instead of 30%+. Laptop stands have more reviews, so they win.
 
-**Retrofit approach:**
-1. Wrap existing functions with `xray.step()`
-2. Start with SUMMARY capture (no performance impact)
-3. Add FULL capture for ranking step only (most critical)
-4. Query across runs to find patterns
+**Fix:** Increase category weight in ranking algorithm.
 
-## Forward-Looking (Not Implemented)
+## Queryability
 
-- **Privacy & redaction**: PII masking in candidate content, configurable redaction rules
-- **Access control**: Per-pipeline permissions, audit logs
-- **Cost governance**: Capture level quotas, automatic downgrade to SUMMARY if quota exceeded
-- **Visualization layer**: Step-by-step decision tree, candidate flow diagrams
-- **Schema evolution**: Versioned artifact schemas, migration tools
-- **LLM-specific explainability**: Token-level attention (if model supports), reasoning chain extraction
+The key constraint: **step_type must be an enum**.
 
-## Trade-offs Acknowledged
+This enables queries like:
+- "Show all FILTER steps with >90% drop ratio" — across all pipelines
+- "Show all RANKING steps where top_score < 0.5" — find low-confidence rankings
+- "Show all GENERATION steps for pipeline X" — debug keyword extraction
 
-1. **Schema rigidity**: Cannot add arbitrary fields without migration. Trade-off: Queryability.
-2. **Capture overhead**: FULL capture is expensive. Trade-off: Opt-in only, sampling strategies.
-3. **No real-time guarantees**: Async ingestion means slight delay. Trade-off: Non-blocking SDK.
-4. **Step typing enforcement**: Developers must use enum values. Trade-off: Cross-pipeline queries.
-5. **Metric normalization**: Must use known keys. Trade-off: Structured queries.
+Developers must use the enum values. The SDK enforces this at compile time (TypeScript).
 
-## Out of Scope (Explicitly)
+For metrics and artifacts, we use JSON with conventions. Developers should use consistent keys within their pipeline. The GIN index on metrics enables queries like:
 
-- UI dashboards (acknowledged, not built)
-- Real-time streaming guarantees
-- Authentication, authorization, billing, tenancy
-- Model training or evaluation
-- Distributed tracing / latency analysis
-- Service deployment, networking, and infrastructure
-- Operational concerns (backups, monitoring, scaling)
+```sql
+SELECT * FROM steps WHERE metrics->>'rejected_count' > 100;
+```
 
+## Performance & Scale
+
+Scenario: 5,000 candidates filtered to 30.
+
+| Capture Level | Storage | Use Case |
+|---------------|---------|----------|
+| NONE | ~100 bytes | Production, zero overhead |
+| SUMMARY | ~1 KB | Debugging, metrics only |
+| FULL | ~250 MB | Deep debugging, all candidates |
+
+**Who decides?** The developer, per step:
+
+```typescript
+// Production: minimal overhead
+await xray.step(StepType.FILTER, 'price-filter', filterFn);
+
+// Debugging: capture artifacts
+await xray.step(StepType.FILTER, 'price-filter', filterFn, {
+  captureLevel: CaptureLevel.SUMMARY,
+  artifacts: { rule: 'price < 100' }
+});
+
+// Deep debugging: capture all candidates
+await xray.step(StepType.RANKING, 'relevance', rankFn, {
+  captureLevel: CaptureLevel.FULL,
+  candidates: candidates.map(c => ({ candidateId: c.id, content: c }))
+});
+```
+
+**Trade-offs:**
+- FULL capture is expensive → use selectively, sample top N candidates
+- Async ingestion adds latency → but SDK never blocks pipeline
+- Schema rigidity limits flexibility → but enables cross-pipeline queries
+
+## Developer Experience
+
+### (a) Minimal instrumentation
+
+```typescript
+import { xray, StepType } from '@xray/core';
+
+xray.configure({ apiUrl: 'http://localhost:4000' });
+
+await xray.run('my-pipeline', 'v1', async () => {
+  const data = await xray.step(StepType.INPUT, 'fetch', fetchData);
+  const filtered = await xray.step(StepType.FILTER, 'filter', () => filter(data));
+  return await xray.step(StepType.SELECTION, 'select', () => pick(filtered));
+});
+```
+
+You get: run tracking, step sequence, candidate counts, drop ratios.
+
+### (b) Full instrumentation
+
+```typescript
+await xray.step(StepType.FILTER, 'price-filter', async () => {
+  return candidates.filter(c => c.price < 100);
+}, {
+  captureLevel: CaptureLevel.FULL,
+  candidates: candidates.map(c => ({ candidateId: c.id, content: c })),
+  artifacts: { threshold: 100, rule: 'price < 100' },
+  metrics: { rejected_count: 450, passed_count: 50 }
+});
+```
+
+### (c) Backend unavailable
+
+1. SDK logs a warning once
+2. All subsequent xray.step() calls become no-ops
+3. Pipeline continues normally
+4. No exceptions thrown
+
+The pipeline never breaks because of X-Ray.
+
+## Real-World Application
+
+I built a real-time sign language translator (hands2words) that had a multi-step ML inference pipeline:
+
+1. **Frame extraction** — capture hand region from video feed
+2. **Pose estimation** — detect hand landmarks using MediaPipe
+3. **Feature extraction** — normalize landmarks, compute angles between joints
+4. **Classification** — run through trained model to predict sign
+5. **Post-processing** — apply confidence threshold, smooth predictions over time
+
+When the system mistranslated signs, debugging was guesswork:
+
+- Was the hand detection failing? 
+- Were the landmarks noisy?
+- Was the model confident but wrong?
+- Was the smoothing filter dropping valid predictions?
+
+Logs just showed "predicted: hello" with no visibility into intermediate steps.
+
+With X-Ray, I would:
+1. Wrap each stage with xray.step()
+2. Capture artifacts: detected landmarks, confidence scores, raw vs smoothed predictions
+3. Query: "Show runs where classification confidence > 0.8 but final output was wrong"
+4. Find the pattern: pose estimation was jittery for certain hand positions, causing misclassification
+
+The fix would be obvious: add temporal smoothing to landmarks before classification, not after.
+
+Time to root cause: hours of staring at video frames → 5 minutes querying X-Ray.
+
+## What Next?
+
+If shipping this for production:
+
+**Cost control**
+- Adaptive sampling: reduce capture level under high load
+- Storage quotas per pipeline
+- Auto-downgrade to SUMMARY when quota exceeded
+
+**Privacy**
+- PII redaction rules before storage
+- Configurable retention policies
+- Audit logging for queries
+
+**Query performance**
+- Materialized views for common aggregations
+- Time-based partitioning
+- Query caching
+
+**Developer experience**
+- CLI tool: `xray query --pipeline=X --step-type=FILTER --min-drop=0.9`
+- IDE integration
+- Alerting on anomalous drop ratios
+
+**Visualization**
+- Decision flow diagrams
+- Side-by-side run comparison
+- Anomaly highlighting
+
+## Trade-offs
+
+| Decision | Sacrifice | Gain |
+|----------|-----------|------|
+| Enum step types | Flexibility | Cross-pipeline queries |
+| Schema rigidity | Arbitrary fields | Structured queries |
+| FULL capture cost | Storage | Deep debugging |
+| Async ingestion | Real-time | Non-blocking SDK |
+
+## Out of Scope
+
+- UI dashboards
+- Authentication
+- Real-time streaming
+- Distributed tracing
+- Model monitoring
+
+These are acknowledged, not forgotten.

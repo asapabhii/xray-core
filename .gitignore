@@ -6,4 +6,5 @@ dist/
 .env.local
 *.tsbuildinfo
 coverage/
+xray.db
 

@@ -2,7 +2,7 @@ import { XRayClient } from './client';
 import { StepType, CaptureLevel, Environment } from './types';
 import { XRayConfig, defaultConfig } from './config';
 
-const defaultClient = new XRayClient();
+let defaultClient = new XRayClient();
 
 export const xray = {
   run: <T>(
@@ -27,9 +27,12 @@ export const xray = {
   /**
    * Configure X-Ray SDK behavior.
    * Configuration is global and affects all subsequent runs.
+   * Creates a new client instance with the updated configuration.
    */
   configure: (config: Partial<XRayConfig>) => {
     Object.assign(defaultConfig, config);
+    // Recreate client with new config
+    defaultClient = new XRayClient(defaultConfig);
   }
 };
 
