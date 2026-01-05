@@ -114,15 +114,14 @@ Developer decides per step. Default is NONE.
 
 - No UI
 - No auth
-- Reference backend uses SQLite for portability; production would use PostgreSQL (schema in `backend/schema.sql`)
+- Demo backend uses SQLite; production would use PostgreSQL (schema in `backend/schema.sql`)
 - FULL capture is expensive — use it selectively
 
 ## Publishing
 
-This SDK is structured to be publishable but remains a reference implementation. Publishing to npm is not required for this assignment.
+Not published to npm yet. Structured to be publishable when ready.
 
 ```bash
-# If publishing were needed:
 npm install @xray/core
 ```
 
@@ -137,9 +136,9 @@ npm install @xray/core
 
 ```
 src/           SDK source
-server/        Reference backend (SQLite, demo only)
+server/        Demo backend (SQLite)
 examples/      Demo pipelines
-backend/       API spec + PostgreSQL schema (production reference)
+backend/       API spec + PostgreSQL schema
 ```
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design rationale.
