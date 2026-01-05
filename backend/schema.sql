@@ -1,5 +1,8 @@
 -- X-Ray Database Schema
 -- PostgreSQL 14+
+-- 
+-- Note: Reference server uses SQLite for portability.
+-- This schema is the production-ready PostgreSQL version.
 
 -- Runs table
 CREATE TABLE runs (
@@ -26,6 +29,8 @@ CREATE TABLE steps (
   metrics JSONB NOT NULL DEFAULT '{}',
   candidates_in INTEGER NOT NULL,
   candidates_out INTEGER NOT NULL,
+  -- drop_ratio is nullable for INPUT steps where candidates_in = 0
+  -- Edge case: if candidates_in = 0, drop_ratio is undefined (NULL)
   drop_ratio DECIMAL(5,4),
   capture_level VARCHAR(20) NOT NULL,
   artifacts JSONB,

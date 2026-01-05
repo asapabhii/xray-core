@@ -11,17 +11,66 @@ npm install
 npm run build
 ```
 
-## Run
+## Quick Demo
 
 ```bash
-npm run server   # Terminal 1
-npm run demo     # Terminal 2
+npm run server   # Terminal 1 - starts reference backend
+npm run demo     # Terminal 2 - runs example pipeline
 ```
 
 Query the results:
 ```bash
 curl http://localhost:4000/api/v1/runs
+```
+
+Example response:
+```json
+{
+  "runs": [
+    {
+      "run_id": "550e8400-e29b-41d4-a716-446655440000",
+      "pipeline_name": "competitor-selection",
+      "pipeline_version": "v1.0.0",
+      "environment": "prod",
+      "started_at": "2024-01-15T10:00:00.000Z",
+      "ended_at": "2024-01-15T10:00:05.000Z"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+Get run details with all steps:
+```bash
 curl http://localhost:4000/api/v1/runs/<run_id>
+```
+
+Example response:
+```json
+{
+  "run": {
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "pipeline_name": "competitor-selection",
+    "pipeline_version": "v1.0.0"
+  },
+  "steps": [
+    {
+      "step_type": "FILTER",
+      "step_name": "price-filter",
+      "candidates_in": 500,
+      "candidates_out": 50,
+      "drop_ratio": 0.9,
+      "artifacts": { "rule": "price < 100" }
+    }
+  ]
+}
+```
+
+Find high drop ratio steps across all pipelines:
+```bash
+curl "http://localhost:4000/api/v1/analytics/high-drop-steps?min_drop_ratio=0.8"
 ```
 
 ## Usage
@@ -65,8 +114,17 @@ Developer decides per step. Default is NONE.
 
 - No UI
 - No auth
-- Reference backend uses SQLite (prod would be Postgres)
+- Reference backend uses SQLite for portability; production would use PostgreSQL (schema in `backend/schema.sql`)
 - FULL capture is expensive — use it selectively
+
+## Publishing
+
+This SDK is structured to be publishable but remains a reference implementation. Publishing to npm is not required for this assignment.
+
+```bash
+# If publishing were needed:
+npm install @xray/core
+```
 
 ## What's next
 
@@ -78,10 +136,10 @@ Developer decides per step. Default is NONE.
 ## Structure
 
 ```
-src/           SDK
-server/        Reference backend
+src/           SDK source
+server/        Reference backend (SQLite, demo only)
 examples/      Demo pipelines
-backend/       API spec + Postgres schema
+backend/       API spec + PostgreSQL schema (production reference)
 ```
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design rationale.

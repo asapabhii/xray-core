@@ -40,3 +40,11 @@ export { XRayClient, StepType, CaptureLevel, Environment };
 export type { Run, Step, Candidate, StepOptions, RunOptions } from './types';
 export type { XRayConfig } from './config';
 
+/**
+ * Create a new X-Ray client instance with custom configuration.
+ * Use this when you need multiple clients pointing to different backends.
+ */
+export function createXRayClient(config: Partial<XRayConfig> = {}): XRayClient {
+  return new XRayClient({ ...defaultConfig, ...config });
+}
+

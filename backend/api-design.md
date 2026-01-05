@@ -314,6 +314,74 @@ Get candidates for a step (only if `capture_level = FULL`).
 - `200 OK`: Candidates found
 - `404 Not Found`: Step not found or capture_level is not FULL
 
+## Analytics Endpoints
+
+### GET /analytics/high-drop-steps
+
+Find steps with high drop ratios across all pipelines. Useful for identifying bottlenecks and debugging aggressive filters.
+
+**Query Parameters:**
+- `min_drop_ratio` (float, default: 0.9): Minimum drop ratio threshold
+- `step_type` (string): Filter by step type
+- `limit` (integer, default: 50): Maximum number of results
+
+**Example:**
+```
+GET /analytics/high-drop-steps?min_drop_ratio=0.8&step_type=FILTER&limit=20
+```
+
+**Response:**
+```json
+{
+  "steps": [
+    {
+      "step_id": "660e8400-e29b-41d4-a716-446655440001",
+      "run_id": "550e8400-e29b-41d4-a716-446655440000",
+      "step_type": "FILTER",
+      "step_name": "price-filter",
+      "position": 2,
+      "metrics": {
+        "rejection_reason": "price_too_high"
+      },
+      "candidates_in": 500,
+      "candidates_out": 50,
+      "drop_ratio": 0.9,
+      "capture_level": "SUMMARY",
+      "artifacts": {
+        "rule": "price < 100"
+      },
+      "started_at": "2024-01-15T10:00:05Z",
+      "ended_at": "2024-01-15T10:00:06Z",
+      "pipeline_name": "competitor-selection",
+      "pipeline_version": "v2.1.0",
+      "run_started_at": "2024-01-15T10:00:00Z"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK`: Query successful
+- `400 Bad Request`: Invalid query parameters
+
+## Utility Endpoints
+
+### GET /
+
+Returns API metadata and available endpoints. Useful for discovery.
+
+### GET /health
+
+Health check endpoint.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-01-15T10:00:00Z"
+}
+```
+
 ## Indexing Strategy
 
 ### Primary Indexes
@@ -352,24 +420,24 @@ This is not implemented in the reference design.
 
 ## Error Responses
 
-Errors are designed for developers integrating the SDK, not end-users. All errors follow this format:
+All errors follow this format:
 ```json
 {
   "error": {
-    "code": "INVALID_STEP_TYPE",
-    "message": "step_type must be one of: INPUT, GENERATION, RETRIEVAL, FILTER, RANKING, EVALUATION, SELECTION",
-    "details": {
-      "provided": "INVALID",
-      "allowed": ["INPUT", "GENERATION", "RETRIEVAL", "FILTER", "RANKING", "EVALUATION", "SELECTION"]
-    }
+    "code": "ERROR_CODE",
+    "message": "Human-readable description",
+    "details": { }
   }
 }
 ```
 
-**Error Codes:**
-- `INVALID_STEP_TYPE`: Invalid step_type enum value
-- `INVALID_CAPTURE_LEVEL`: Invalid capture_level enum value
-- `RUN_NOT_FOUND`: Referenced run does not exist
-- `STEP_NOT_FOUND`: Referenced step does not exist
-- `CANDIDATES_NOT_CAPTURED`: Step capture_level is not FULL
+| Code | HTTP | Description |
+|------|------|-------------|
+| `INVALID_REQUEST` | 400 | Missing required fields |
+| `INVALID_STEP_TYPE` | 400 | step_type not in enum |
+| `INVALID_CAPTURE_LEVEL` | 400 | capture_level not in enum |
+| `RUN_NOT_FOUND` | 404 | Referenced run does not exist |
+| `STEP_NOT_FOUND` | 404 | Referenced step does not exist |
+| `CANDIDATES_NOT_CAPTURED` | 400/404 | Step capture_level is not FULL |
+| `INTERNAL_ERROR` | 500 | Server error |
 
