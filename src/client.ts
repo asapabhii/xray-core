@@ -287,8 +287,6 @@ export class XRayClient {
 
   private handleDegradation(): void {
     if (!this.degraded) {
-      // Degrade silently - instrumentation should never break the pipeline
-      // Logging can be added by consumers if needed
       this.degraded = true;
     }
   }
