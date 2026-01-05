@@ -2,7 +2,7 @@ import { CaptureLevel } from './types';
 
 export interface XRayConfig {
   apiUrl?: string;
-  apiKey?: string; // Optional, not used in reference implementation (auth out of scope)
+  apiKey?: string;
   defaultCaptureLevel: CaptureLevel;
   enableAsyncIngestion: boolean;
   batchSize: number;
